@@ -1,0 +1,8 @@
+namespace aliccp;
+table Feature
+{
+    feat_field_id: string;
+    feat_id: uint32;
+    value: float32;
+}
+
