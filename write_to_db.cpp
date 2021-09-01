@@ -4,6 +4,7 @@
 #include <boost/algorithm/string.hpp>
 #include <fstream>
 #include <gflags/gflags.h>
+#include <iostream>
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
 #include <rocksdb/table.h>
@@ -34,7 +35,7 @@ static void
 print_comm_feats(aliccp::CommFeature const* comm_feats)
 {
     fprintf(stderr,
-            "Get example: comm_feat_idx = %s, feat_num = %u, nfeats "
+            "Get comm feats: comm_feat_idx = %s, feat_num = %u, nfeats "
             "= %u\n",
             comm_feats->comm_feat_id()->c_str(),
             comm_feats->feat_num(),
@@ -85,7 +86,7 @@ parse_feats(flatbuffers::FlatBufferBuilder& builder,
 }
 
 static int
-parse_skeleton_line(flatbuffers::FlatBufferBuilder& builder, std::string const& line, rocksdb::Slice& key)
+parse_skeleton_line(flatbuffers::FlatBufferBuilder& builder, std::string const& line, std::vector<char>& key)
 {
     std::vector<std::string> items;
     boost::split(items, line, boost::is_any_of(","));
@@ -100,7 +101,10 @@ parse_skeleton_line(flatbuffers::FlatBufferBuilder& builder, std::string const& 
     auto const& feat_idx = items[3];
     auto const feat_num = static_cast<uint16_t>(std::stoul(items[4]));
     auto const& feats = items[5];
-    key = rocksdb::Slice(reinterpret_cast<const char*>(&example_id), sizeof(example_id));
+    const char* p = reinterpret_cast<const char*>(&example_id);
+    for (auto i = 0; i < sizeof(example_id); ++i) {
+        key.push_back(p[i]);
+    }
 
     std::vector<flatbuffers::Offset<aliccp::Feature>> vfeats;
     if (parse_feats(builder, feats, vfeats) != 0) {
@@ -114,7 +118,7 @@ parse_skeleton_line(flatbuffers::FlatBufferBuilder& builder, std::string const& 
 }
 
 static int
-parse_common_line(flatbuffers::FlatBufferBuilder& builder, std::string const& line, rocksdb::Slice& key)
+parse_common_line(flatbuffers::FlatBufferBuilder& builder, std::string const& line, std::vector<char>& key)
 {
     std::vector<std::string> items;
     boost::split(items, line, boost::is_any_of(","));
@@ -127,8 +131,8 @@ parse_common_line(flatbuffers::FlatBufferBuilder& builder, std::string const& li
     auto const& comm_feat_id = items[0];
     auto const feat_num = static_cast<uint16_t>(std::stoul(items[1]));
     auto const& feats = items[2];
-    key = comm_feat_id;
 
+    std::copy(comm_feat_id.cbegin(), comm_feat_id.cend(), std::back_inserter(key));
     std::vector<flatbuffers::Offset<aliccp::Feature>> vfeats;
     if (parse_feats(builder, feats, vfeats) != 0) {
         fprintf(stderr, "parse comm_feat feats failed. line = %s\n", feats.c_str());
@@ -151,7 +155,7 @@ open_db(const char* path, rocksdb::DB** db)
     opt.target_file_size_base = 67108864;
 
     rocksdb::BlockBasedTableOptions table_opt;
-    table_opt.block_cache = rocksdb::NewLRUCache(2 * (1024 * 1024 * 1024));
+    table_opt.block_cache = rocksdb::NewLRUCache(1000 * (1024 * 1024));
     table_opt.block_cache_compressed = rocksdb::NewLRUCache(500 * (1024 * 1024));
     opt.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_opt));
     return rocksdb::DB::Open(opt, path, db);
@@ -161,6 +165,7 @@ DEFINE_string(type, "", "[example|comm_feat]");
 DEFINE_string(data, "", "path to data");
 DEFINE_string(db, "", "Path to db");
 DEFINE_int32(batch, 10000, "batch size");
+DEFINE_int64(total, -1, "total records");
 
 int
 main(int argc, char* argv[])
@@ -196,22 +201,25 @@ main(int argc, char* argv[])
 
     auto batch = std::make_shared<rocksdb::WriteBatch>();
     auto start = time(nullptr);
+    uint64_t total_size = 0;
     while (std::getline(ifs, line)) {
-        rocksdb::Slice key;
+        std::vector<char> keybuf;
         if (isexample) {
-            parse_skeleton_line(builder, line, key);
+            parse_skeleton_line(builder, line, keybuf);
         } else {
-            parse_common_line(builder, line, key);
+            parse_common_line(builder, line, keybuf);
         }
 
         auto buf = builder.GetBufferSpan();
         rocksdb::Slice value(reinterpret_cast<char*>(buf.data()), buf.size());
         if (isexample) {
             // print_example(aliccp::GetExample(buf.data()));
-        }else{
+        } else {
             // print_comm_feats(aliccp::GetCommFeature(buf.data()));
         }
-
+        
+        total_size += (keybuf.size() + value.size());
+        rocksdb::Slice key(keybuf.data(), keybuf.size());
         batch->Put(key, value);
         ++cnt;
         builder.Clear();
@@ -219,13 +227,18 @@ main(int argc, char* argv[])
         if (cnt % FLAGS_batch == 0) {
             pdb->Write(option, &(*batch));
             fprintf(stderr,
-                    "write batch size = %d, cnt = %d, builder.buffer_size = %u, cost %ld seconds\n",
+                    "write batch size = %d, cnt = %d, total_writen_size = %lu, cost %ld seconds\n",
                     FLAGS_batch,
                     cnt,
-                    builder.GetSize(),
+                    total_size,
                     time(nullptr) - start);
             start = time(nullptr);
             batch = std::make_shared<rocksdb::WriteBatch>();
         }
+
+        if ((FLAGS_total > 0) && cnt >= FLAGS_total){
+            break;
+        }
     }
+    if (batch->GetDataSize() > 0) pdb->Write(option, &(*batch));
 }
