@@ -70,13 +70,13 @@ class AliCCPRocksDBOp : public OpKernel
         rocksdb::DB* db;
         auto status = open_db(examples_db.c_str(), &db);
         if (!status.ok()) {
-            context->CtxFailure(Status(error::INVALID_ARGUMENT, status.ToString()));
+            context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, status.ToString()));
         }
         example_db_ = std::shared_ptr<rocksdb::DB>(db);
 
         status = open_db(comm_feats_db.c_str(), &db);
         if (!status.ok()) {
-            context->CtxFailure(Status(error::INVALID_ARGUMENT, status.ToString()));
+            context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, status.ToString()));
         }
         comm_feats_db_ = std::shared_ptr<rocksdb::DB>(db);
 
@@ -88,14 +88,14 @@ class AliCCPRocksDBOp : public OpKernel
         TensorShape shape;
         auto status = TensorShapeUtils::MakeShape(dims.data(), dims.size(), &shape);
         if (!status.ok()) {
-            context->CtxFailure(Status(error::INVALID_ARGUMENT, status.ToString()));
+            context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, status.ToString()));
             return nullptr;
         }
 
         Tensor* tensor = nullptr;
         status = context->allocate_output(i, shape, &tensor);
         if (!status.ok()) {
-            context->CtxFailure(Status(error::INVALID_ARGUMENT, status.ToString()));
+            context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, status.ToString()));
             return nullptr;
         }
 
@@ -197,7 +197,8 @@ class AliCCPRocksDBOp : public OpKernel
         };
 
         auto thread_pool = context->device()->tensorflow_cpu_worker_threads()->workers;
-        thread_pool->ParallelFor(batch_nums, 10 * 600 * batch_size, std::move(parse_batch));
+        auto cost_per_unit = 10 * 6000 * batch_size;
+        thread_pool->ParallelFor(batch_nums, cost_per_unit, std::move(parse_batch));
     }
 
     void Compute(OpKernelContext* context) override
@@ -205,7 +206,8 @@ class AliCCPRocksDBOp : public OpKernel
         auto const input = context->input(0);
 
         if (input.dims() != 1) {
-            context->CtxFailure(Status(error::INVALID_ARGUMENT, "1d tensor is accepted only."));
+            context->CtxFailure(
+                __FILE__, __LINE__, Status(error::INVALID_ARGUMENT, "1d tensor is accepted only."));
             return;
         }
 
@@ -258,7 +260,6 @@ class AliCCPRocksDBOp : public OpKernel
         Timer timer;
         parse_examples(
             context, examples, comm_feats, field_id_tensor, feat_id_tensor, feats_tensor, y, z, lens_tensor);
-        LOG(INFO) << "parse examples cost " << timer.elapsed_ms() << "ms";
     }
 
   private:
@@ -273,12 +274,11 @@ class AliCCPRocksDBOp : public OpKernel
         for (auto i = 0; i < keys.size(); ++i) {
             auto s = status[i];
             if (!s.ok()) {
-                failed += 1;
+                std::string msg = s.ToString() + ": key = " + keys[i].ToString(true);
+                return Status(error::DATA_LOSS, msg);
             }
         }
 
-        LOG(INFO) << "read keys size = " << keys.size() << ", cost = " << timer.elapsed_ms() << "ms"
-                  << ", failed counts = " << failed;
         return Status::OK();
     }
 
