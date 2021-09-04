@@ -8,26 +8,10 @@
 #include "tensorflow/core/lib/core/threadpool.h"
 #include <functional>
 #include <rocksdb/db.h>
+#include <rocksdb/filter_policy.h>
 #include <rocksdb/options.h>
 #include <rocksdb/table.h>
 #include <unordered_set>
-
-static rocksdb::Status
-open_db(const char* path, rocksdb::DB** db)
-{
-    rocksdb::Options opt;
-    opt.create_if_missing = false;
-    opt.max_open_files = 3000;
-    opt.max_write_buffer_number = 3;
-    opt.target_file_size_base = 67108864;
-    opt.new_table_reader_for_compaction_inputs = true;
-
-    rocksdb::BlockBasedTableOptions table_opt;
-    table_opt.block_cache = rocksdb::NewLRUCache((1024 * 1024 * 1024));
-    opt.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_opt));
-
-    return rocksdb::DB::OpenForReadOnly(opt, path, db);
-}
 
 namespace std {
 template<>
@@ -80,7 +64,7 @@ class AliCCPRocksDBOp : public OpKernel
         }
         comm_feats_db_ = std::shared_ptr<rocksdb::DB>(db);
 
-        read_opts_.readahead_size = 1024 * 1024 * 1024;
+        //    read_opts_.readahead_size = 1024 * 1024 * 1024;
     }
 
     static Tensor* alloc_tensor(OpKernelContext* context, std::vector<int32> const& dims, int const i)
@@ -246,6 +230,7 @@ class AliCCPRocksDBOp : public OpKernel
         std::unordered_map<std::string, const aliccp::CommFeature*> comm_feats;
         OP_REQUIRES_OK(context,
                        read_db(comm_feats_db_,
+                               read_opts_,
                                std::vector<rocksdb::Slice>(comm_keys.begin(), comm_keys.end()),
                                comm_feats_buf));
 
@@ -260,15 +245,17 @@ class AliCCPRocksDBOp : public OpKernel
         Timer timer;
         parse_examples(
             context, examples, comm_feats, field_id_tensor, feat_id_tensor, feats_tensor, y, z, lens_tensor);
+
     }
 
   private:
     Status read_db(std::shared_ptr<rocksdb::DB> db,
+                   rocksdb::ReadOptions const& opt,
                    std::vector<rocksdb::Slice> const& keys,
                    std::vector<std::string>& values)
     {
         Timer timer;
-        auto status = db->MultiGet(read_opts_, keys, &values);
+        auto status = db->MultiGet(opt, keys, &values);
 
         int failed = 0;
         for (auto i = 0; i < keys.size(); ++i) {
@@ -301,14 +288,39 @@ class AliCCPRocksDBOp : public OpKernel
             keys.push_back(key);
         }
 
-        auto status = read_db(example_db_, keys, values);
+        auto status = read_db(example_db_, read_opts_, keys, values);
         free(keybuf);
         return status;
+    }
+
+    rocksdb::Status open_db(const char* path, rocksdb::DB** db)
+    {
+        auto& opt = opt_;
+        opt.create_if_missing = false;
+        opt.max_open_files = -1;
+        opt.max_write_buffer_number = 3;
+        opt.target_file_size_base = 67108864;
+        opt.new_table_reader_for_compaction_inputs = true;
+        opt.statistics = rocksdb::CreateDBStatistics();
+        opt.stats_dump_period_sec = 10;
+        opt.compression = rocksdb::kZlibCompression;
+
+        rocksdb::BlockBasedTableOptions table_opt;
+        table_opt.block_cache = rocksdb::NewLRUCache((1024 * 1024 * 1024));
+        table_opt.block_cache_compressed = rocksdb::NewLRUCache(500 * (1024 * 1024));
+        table_opt.cache_index_and_filter_blocks = true;
+        table_opt.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
+        table_opt.index_type = rocksdb::BlockBasedTableOptions::kHashSearch;
+        table_opt.block_size = 4 * 1024;
+        opt.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_opt));
+
+        return rocksdb::DB::OpenForReadOnly(opt, path, db);
     }
 
     std::shared_ptr<rocksdb::DB> example_db_;
     std::shared_ptr<rocksdb::DB> comm_feats_db_;
     rocksdb::ReadOptions read_opts_;
+    rocksdb::Options opt_;
     int32 max_feats_;
 };
 REGISTER_KERNEL_BUILDER(Name("AliCCPRocksDB").Device(DEVICE_CPU), AliCCPRocksDBOp);

@@ -44,6 +44,7 @@ CXXFLAGS += -std=c++11
 CXXFLAGS += -O3
 
 INCLUDES := -I$(ROCKSDB_PATH)/include/
+#INCLUDES := -I/home/seminelee/github/rocksdb/include/
 INCLUDES += -I$(GFLAGS_PATH)/build/include/
 
 all: read_from_db write_to_db aliccp_rocksdb_op.so

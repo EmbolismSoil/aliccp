@@ -153,6 +153,7 @@ open_db(const char* path, rocksdb::DB** db)
     opt.write_buffer_size = 500 * 1024 * 1024;
     opt.max_write_buffer_number = 3;
     opt.target_file_size_base = 67108864;
+    opt.compression = rocksdb::kZlibCompression;
 
     rocksdb::BlockBasedTableOptions table_opt;
     table_opt.block_cache = rocksdb::NewLRUCache(1000 * (1024 * 1024));
@@ -183,8 +184,9 @@ main(int argc, char* argv[])
     }
 
     rocksdb::DB* db = nullptr;
-    if (!open_db(FLAGS_db.c_str(), &db).ok()) {
-        fprintf(stderr, "open db failed: %s\n", FLAGS_db.c_str());
+    auto status = open_db(FLAGS_db.c_str(), &db);
+    if (!status.ok()) {
+        fprintf(stderr, "open db failed: %s, msg: %s\n", FLAGS_db.c_str(), status.ToString().c_str());
         return -1;
     }
 
@@ -217,7 +219,7 @@ main(int argc, char* argv[])
         } else {
             // print_comm_feats(aliccp::GetCommFeature(buf.data()));
         }
-        
+
         total_size += (keybuf.size() + value.size());
         rocksdb::Slice key(keybuf.data(), keybuf.size());
         batch->Put(key, value);
@@ -236,7 +238,7 @@ main(int argc, char* argv[])
             batch = std::make_shared<rocksdb::WriteBatch>();
         }
 
-        if ((FLAGS_total > 0) && cnt >= FLAGS_total){
+        if ((FLAGS_total > 0) && cnt >= FLAGS_total) {
             break;
         }
     }
