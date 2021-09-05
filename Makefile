@@ -35,8 +35,8 @@ MAKE  ?= make
 FLATC := $(FLATBUFFERS_PATH)/flatc
 
 JOBS := -j10
-GENERATEDS := feature_generated.h comm_feats_generated.h example_generated.h
-FBS_IDL := feature.fbs comm_feats.fbs example.fbs
+FBS_IDL := $(wildcard *.fbs)
+GENERATEDS := $(FBS_IDL:%.fbs=%_generated.h)
 
 SHARD_LIB_FLAGS += -fPIC
 CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
@@ -44,12 +44,12 @@ CXXFLAGS += -std=c++11
 CXXFLAGS += -O3
 
 INCLUDES := -I$(ROCKSDB_PATH)/include/
-#INCLUDES := -I/home/seminelee/github/rocksdb/include/
 INCLUDES += -I$(GFLAGS_PATH)/build/include/
 
 all: read_from_db write_to_db aliccp_rocksdb_op.so
 $(GENERATEDS) : $(FBS_IDL) $(FLATC)
 	$(FLATC) -c -b $(FBS_IDL)
+	$(FLATC) --python -c -b $(FBS_IDL)
 
 read_from_db: read_from_db.cpp $(GENERATEDS) $(LIB_ROCKSDB) $(LIB_GFLAGS)
 	$(CXX) read_from_db.cpp $(CXXFLAGS) $(INCLUDES) $(GFLAGS_LDFLAGS) $(ROCKSDB_LDFALGS) -o $@  -lz

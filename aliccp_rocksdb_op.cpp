@@ -6,7 +6,11 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/lib/core/threadpool.h"
+#include "vocab_generated.h"
+#include <errno.h>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <rocksdb/db.h>
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/options.h>
@@ -35,7 +39,115 @@ REGISTER_OP("AliCCPRocksDB")
     .Output("lens: int64")
     .Attr("examples_db: string")
     .Attr("comm_feats_db: string")
-    .Attr("max_feats: int");
+    .Attr("max_feats: int")
+    .Attr("vocab: string")
+    .SetShapeFn([](shape_inference::InferenceContext* context) {
+        auto example_ids = context->input(0);
+        context->set_output(0, example_ids);
+        context->set_output(1, example_ids);
+        context->set_output(2, example_ids);
+        context->set_output(3, example_ids);
+        context->set_output(4, example_ids);
+        context->set_output(5, example_ids);
+        return Status::OK();
+    });
+
+REGISTER_OP("AliCCPFieldInfo")
+    .Attr("vocab: string")
+    .Output("field_id: int64")
+    .Output("counts: int64")
+    .Output("slots: int64");
+
+static Status
+read_vocab(std::string const& path, std::function<Status(const aliccp::Vocab*)> parser)
+{
+    if (::access(path.c_str(), R_OK) < 0) {
+        char buf[1024];
+        return Status(error::DATA_LOSS, strerror_r(errno, buf, sizeof(buf)));
+    }
+
+    std::ifstream ifs(path, std::ios::binary);
+    std::vector<char> buffer{ std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>() };
+    auto vocab = aliccp::GetVocab(buffer.data());
+    if (!vocab) {
+        return Status(error::DATA_LOSS, "read vocab failed: vocab is nullptr");
+    }
+
+    return parser(vocab);
+}
+
+static Tensor*
+alloc_tensor(OpKernelContext* context, std::vector<int32> const& dims, int const i)
+{
+    TensorShape shape;
+    auto status = TensorShapeUtils::MakeShape(dims.data(), dims.size(), &shape);
+    if (!status.ok()) {
+        context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, status.ToString()));
+        return nullptr;
+    }
+
+    Tensor* tensor = nullptr;
+    status = context->allocate_output(i, shape, &tensor);
+    if (!status.ok()) {
+        context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, status.ToString()));
+        return nullptr;
+    }
+
+    return tensor;
+}
+
+class AliCCPFieldInfoOp : public OpKernel
+{
+  public:
+    AliCCPFieldInfoOp(OpKernelConstruction* context)
+        : OpKernel(context)
+    {
+        std::string vocab;
+        OP_REQUIRES_OK(context, context->GetAttr("vocab", &vocab));
+
+        auto parse_vocab_op = [this](aliccp::Vocab const* vocab) {
+            auto infos = vocab->field_infos();
+            if (!infos) {
+                return Status(error::DATA_LOSS, "parse vocab infos failed.");
+            }
+
+            for (auto const& info : *infos) {
+                auto field_id = static_cast<int64>(info->field_id());
+                auto slots = static_cast<int64>(info->slots());
+                auto counts = static_cast<int64>(info->counts());
+
+                infos_[field_id] = std::make_pair(slots, counts);
+            }
+
+            return Status::OK();
+        };
+        OP_REQUIRES_OK(context, read_vocab(vocab, parse_vocab_op));
+    }
+
+    void Compute(OpKernelContext* context) override
+    {
+        auto field = alloc_tensor(context, { (int32)infos_.size() }, 0);
+        auto slots = alloc_tensor(context, { (int32)infos_.size() }, 1);
+        auto counts = alloc_tensor(context, { (int32)infos_.size() }, 2);
+
+        if (!field || !counts || !slots) {
+            return;
+        }
+
+        auto field_flat = field->flat<int64>();
+        auto slots_flat = slots->flat<int64>();
+        auto counts_flat = counts->flat<int64>();
+        auto it = infos_.cbegin();
+        for (auto i = 0; i < infos_.size(); ++i, it = std::next(it)) {
+            field_flat(i) = it->first;
+            slots_flat(i) = it->second.first;
+            counts_flat(i) = it->second.second;
+        }
+    }
+
+  private:
+    std::unordered_map<int64, std::pair<int64, int64>> infos_;
+};
 
 class AliCCPRocksDBOp : public OpKernel
 {
@@ -47,9 +159,28 @@ class AliCCPRocksDBOp : public OpKernel
         OP_REQUIRES_OK(context, context->GetAttr("examples_db", &examples_db));
 
         std::string comm_feats_db;
+        std::string vocab;
         OP_REQUIRES_OK(context, context->GetAttr("comm_feats_db", &comm_feats_db));
-
         OP_REQUIRES_OK(context, context->GetAttr("max_feats", &max_feats_));
+        OP_REQUIRES_OK(context, context->GetAttr("vocab", &vocab));
+
+        auto parse_vocab_op = [this](aliccp::Vocab const* vocab) {
+            auto entries = vocab->entries();
+            if (!entries) {
+                return Status(error::DATA_LOSS, "read vocab failed: vocab has not entries");
+            }
+
+            for (auto const& entry : *entries) {
+                auto const field_id = static_cast<int64>(entry->field_id());
+                auto const feat_id = static_cast<int64>(entry->feat_id());
+                auto const vocab_id = static_cast<int64>(entry->vocab_id());
+                vocab_[field_id][feat_id] = vocab_id;
+            }
+
+            return Status::OK();
+        };
+
+        OP_REQUIRES_OK(context, read_vocab(vocab, std::move(parse_vocab_op)));
 
         rocksdb::DB* db;
         auto status = open_db(examples_db.c_str(), &db);
@@ -63,27 +194,6 @@ class AliCCPRocksDBOp : public OpKernel
             context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, status.ToString()));
         }
         comm_feats_db_ = std::shared_ptr<rocksdb::DB>(db);
-
-        //    read_opts_.readahead_size = 1024 * 1024 * 1024;
-    }
-
-    static Tensor* alloc_tensor(OpKernelContext* context, std::vector<int32> const& dims, int const i)
-    {
-        TensorShape shape;
-        auto status = TensorShapeUtils::MakeShape(dims.data(), dims.size(), &shape);
-        if (!status.ok()) {
-            context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, status.ToString()));
-            return nullptr;
-        }
-
-        Tensor* tensor = nullptr;
-        status = context->allocate_output(i, shape, &tensor);
-        if (!status.ok()) {
-            context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, status.ToString()));
-            return nullptr;
-        }
-
-        return tensor;
     }
 
     void parse_examples(OpKernelContext* context,
@@ -100,20 +210,23 @@ class AliCCPRocksDBOp : public OpKernel
         auto field_id_matrix = field_id_tensor->matrix<int64>();
         auto feat_id_matrix = feat_id_tensor->matrix<int64>();
 
-        auto field_to_int64 = [](std::string const& field_id) {
-            if (field_id.find('_') != std::string::npos) {
-                std::string buf;
-                std::copy_if(field_id.cbegin(), field_id.cend(), std::back_inserter(buf), [](const char c) {
-                    return c != '_';
-                });
-                return std::stol(buf);
-            } else {
-                return 100 * std::stol(field_id);
-            }
-        };
-
         auto batch_size = 64;
         auto batch_nums = (examples.size() + batch_size - 1) / batch_size;
+
+        auto map_to_vocab_id = [this](int64 const field_id, int64 const feat_id) -> int64 {
+            auto const& vocab = vocab_;
+            auto const field_it = vocab.find(field_id);
+            if (field_it == vocab.cend()) {
+                return 0L;
+            }
+
+            auto const feat_it = field_it->second.find(feat_id);
+            if (feat_it == field_it->second.cend()) {
+                return 0L;
+            }
+
+            return feat_it->second;
+        };
 
         auto parse_batch = [this,
                             batch_size,
@@ -125,7 +238,7 @@ class AliCCPRocksDBOp : public OpKernel
                             &y,
                             &z,
                             &lens_tensor,
-                            field_to_int64](Eigen::Index start, Eigen::Index end) {
+                            &map_to_vocab_id](Eigen::Index start, Eigen::Index end) {
             start = std::min(start * batch_size, (Eigen::Index)examples.size());
             end = std::min(end * batch_size, (Eigen::Index)examples.size());
 
@@ -149,8 +262,8 @@ class AliCCPRocksDBOp : public OpKernel
                     auto value = feat->value();
 
                     feat_matrix(i, k) = value;
-                    field_id_matrix(i, k) = field_to_int64(field_id->str());
-                    feat_id_matrix(i, k) = feat_id;
+                    field_id_matrix(i, k) = static_cast<int64>(field_id);
+                    feat_id_matrix(i, k) = map_to_vocab_id(field_id, feat_id);
                 }
 
                 auto comm_feat_id = example->comm_feat_id();
@@ -166,8 +279,8 @@ class AliCCPRocksDBOp : public OpKernel
                         auto value = feat->value();
 
                         feat_matrix(i, k) = value;
-                        field_id_matrix(i, k) = field_to_int64(field_id->str());
-                        feat_id_matrix(i, k) = feat_id;
+                        field_id_matrix(i, k) = static_cast<int64>(field_id);
+                        feat_id_matrix(i, k) = map_to_vocab_id(field_id, feat_id);
                     }
                 }
 
@@ -245,7 +358,6 @@ class AliCCPRocksDBOp : public OpKernel
         Timer timer;
         parse_examples(
             context, examples, comm_feats, field_id_tensor, feat_id_tensor, feats_tensor, y, z, lens_tensor);
-
     }
 
   private:
@@ -322,7 +434,9 @@ class AliCCPRocksDBOp : public OpKernel
     rocksdb::ReadOptions read_opts_;
     rocksdb::Options opt_;
     int32 max_feats_;
+    std::unordered_map<int64, std::unordered_map<int64, int64>> vocab_;
 };
 REGISTER_KERNEL_BUILDER(Name("AliCCPRocksDB").Device(DEVICE_CPU), AliCCPRocksDBOp);
+REGISTER_KERNEL_BUILDER(Name("AliCCPFieldInfo").Device(DEVICE_CPU), AliCCPFieldInfoOp);
 };
 

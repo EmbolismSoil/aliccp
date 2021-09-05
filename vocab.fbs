@@ -1,0 +1,22 @@
+namespace aliccp;
+struct VocabEntry
+{
+  field_id: uint32;
+  feat_id: uint32;
+  vocab_id: uint32;
+  counts: uint32;
+}
+
+struct FieldInfo
+{
+  field_id: uint32;
+  slots: uint32;
+  counts: uint32;
+}
+
+table Vocab{
+  entries: [ VocabEntry ];
+  field_infos: [ FieldInfo ];
+}
+
+root_type Vocab;

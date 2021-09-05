@@ -40,8 +40,8 @@ print_example(aliccp::Example const* example)
 
     for (auto const& feat : *example->feats()) {
         fprintf(stderr,
-                "Get feature: feat_field_id = %s, feat_id = %u, value = %f\n",
-                feat->feat_field_id()->c_str(),
+                "Get feature: feat_field_id = %u, feat_id = %u, value = %f\n",
+                feat->feat_field_id(),
                 feat->feat_id(),
                 feat->value());
     }
@@ -59,8 +59,8 @@ print_comm_feats(aliccp::CommFeature const* comm_feats)
 
     for (auto const& feat : *comm_feats->feats()) {
         fprintf(stderr,
-                "Get feature: feat_field_id = %s, feat_id = %u, value = %f\n",
-                feat->feat_field_id()->c_str(),
+                "Get feature: feat_field_id = %u, feat_id = %u, value = %f\n",
+                feat->feat_field_id(),
                 feat->feat_id(),
                 feat->value());
     }
