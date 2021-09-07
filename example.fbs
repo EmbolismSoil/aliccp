@@ -1,0 +1,12 @@
+include "feature.fbs";
+namespace aliccp;
+table Example
+{
+  example_id: uint32;
+  y: uint8;
+  z: uint8;
+  comm_feat_id: string;
+  feat_num: uint16;
+  feats: [ Feature ];
+}
+root_type Example;

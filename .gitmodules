@@ -1,0 +1,9 @@
+[submodule "thirdparty/rocksdb"]
+	path = thirdparty/rocksdb
+	url = https://github.com/facebook/rocksdb.git
+[submodule "thirdparty/gflags"]
+	path = thirdparty/gflags
+	url = https://github.com/gflags/gflags.git
+[submodule "thirdparty/flatbuffers"]
+	path = thirdparty/flatbuffers
+	url = https://github.com/google/flatbuffers.git

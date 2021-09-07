@@ -1,0 +1,9 @@
+include "feature.fbs";
+namespace aliccp;
+table CommFeature
+{
+  comm_feat_id: string;
+  feat_num: uint16;
+  feats: [ Feature ];
+}
+root_type CommFeature;
