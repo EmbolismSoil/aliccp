@@ -15,6 +15,7 @@
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/options.h>
 #include <rocksdb/table.h>
+#include <type_traits>
 #include <unordered_set>
 
 namespace std {
@@ -436,6 +437,100 @@ class AliCCPRocksDBOp : public OpKernel
     int32 max_feats_;
     std::unordered_map<int64, std::unordered_map<int64, int64>> vocab_;
 };
+
+#ifdef GOOGLE_CUDA
+REGISTER_OP("AliCCPSelectField")
+    .Input("field_id: int64")
+    .Input("feat_id: int64")
+    .Input("feat_values: float32")
+    .Input("target_field: int64")
+    .Output("indices: int64")
+    .Output("ids: int64")
+    .Output("values: float32");
+
+#include "field_select_kernel.h"
+#define tensor_access_ptr(tensor, type) (&((tensor).flat<type>()(0)))
+class AliCCPSelectField : public OpKernel
+{
+  public:
+    AliCCPSelectField(OpKernelConstruction* context)
+        : OpKernel(context)
+    {}
+
+    void Compute(OpKernelContext* context) override
+    {
+        auto const& field_id_tensor = context->input(0);
+        auto const& feat_id_tensor = context->input(1);
+        auto const& feat_values_tensor = context->input(2);
+        auto const& target_field_tensor = context->input(3);
+
+        if (field_id_tensor.dims() != 2 || feat_id_tensor.dims() != 2 || feat_values_tensor.dims() != 2 ||
+            target_field_tensor.dims() != 0) {
+            LOG(INFO) << "field_id_tensor.dims() = " << field_id_tensor.dims()
+                      << ", feat_id_tensor.dims() = " << feat_id_tensor.dims()
+                      << ", feat_values_tensor.dims() = " << feat_values_tensor.dims()
+                      << ", target_field_tensor.dims() = " << target_field_tensor.dims();
+            context->CtxFailure(__FILE__, __LINE__, Status(error::INVALID_ARGUMENT, "input dims error"));
+            return;
+        }
+
+        Tensor counts;
+        Tensor conds;
+        Tensor mask;
+
+        OP_REQUIRES_OK(context, context->allocate_temp(DataTypeToEnum<int>::value, { 1 }, &counts));
+        OP_REQUIRES_OK(
+            context,
+            context->allocate_temp(DataTypeToEnum<int>::value, { 1, field_id_tensor.dim_size(0) }, &conds));
+        OP_REQUIRES_OK(context,
+                       context->allocate_temp(DataTypeToEnum<int>::value, field_id_tensor.shape(), &mask));
+
+        ::FieldSelectFuctor<Eigen::GpuDevice> functor(context->eigen_gpu_device());
+
+        auto const ny = static_cast<unsigned int>(field_id_tensor.dim_size(0));
+        auto const nx = static_cast<unsigned int>(field_id_tensor.dim_size(1));
+        auto const nxy = nx * ny;
+
+        int* counts_ptr = tensor_access_ptr(counts, int);
+        int* conds_ptr = tensor_access_ptr(conds, int);
+        int* mask_ptr = tensor_access_ptr(mask, int);
+
+        auto const target_field_ptr = tensor_access_ptr(target_field_tensor, int64);
+        auto const field_ids_ptr = tensor_access_ptr(field_id_tensor, int64);
+        auto const feat_ids_ptr = tensor_access_ptr(feat_id_tensor, int64);
+        auto const feat_values_ptr = tensor_access_ptr(feat_values_tensor, float);
+
+        Tensor* output_indices_tensor = nullptr;
+        Tensor* output_feat_ids_tensor = nullptr;
+        Tensor* output_feat_values_tensor = nullptr;
+
+        int cpu_counts = 0;
+        functor.launch_target_field_mask(
+            nx, ny, nxy, target_field_ptr, field_ids_ptr, counts_ptr, conds_ptr, mask_ptr, cpu_counts);
+        OP_REQUIRES_OK(context, context->allocate_output(0, { cpu_counts, 2 }, &output_indices_tensor));
+        OP_REQUIRES_OK(context, context->allocate_output(1, { cpu_counts }, &output_feat_ids_tensor));
+        OP_REQUIRES_OK(context, context->allocate_output(2, { cpu_counts }, &output_feat_values_tensor));
+
+        auto output_indices = tensor_access_ptr(*output_indices_tensor, int64);
+        auto output_feat_ids = tensor_access_ptr(*output_feat_ids_tensor, int64);
+        auto output_feat_values = tensor_access_ptr(*output_feat_values_tensor, float);
+
+        functor.luanch_select_feat(nx,
+                                   ny,
+                                   nxy,
+                                   mask_ptr,
+                                   feat_ids_ptr,
+                                   feat_values_ptr,
+                                   conds_ptr,
+                                   counts_ptr,
+                                   output_indices,
+                                   output_feat_ids,
+                                   output_feat_values);
+    }
+};
+REGISTER_KERNEL_BUILDER(Name("AliCCPSelectField").Device(DEVICE_GPU), AliCCPSelectField);
+#endif
+
 REGISTER_KERNEL_BUILDER(Name("AliCCPRocksDB").Device(DEVICE_CPU), AliCCPRocksDBOp);
 REGISTER_KERNEL_BUILDER(Name("AliCCPFieldInfo").Device(DEVICE_CPU), AliCCPFieldInfoOp);
 };
