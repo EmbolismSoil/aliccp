@@ -24,7 +24,7 @@ struct FieldSelectFuctor<Eigen::GpuDevice>
                                   int* mask,
                                   int& cpu_counts);
 
-    void luanch_select_feat(unsigned int const nx,
+    void launch_select_feat(unsigned int const nx,
                             unsigned int const ny,
                             unsigned int const nxy,
                             int const* mask,

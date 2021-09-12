@@ -75,7 +75,7 @@ aliccp_rocksdb_op.so: $(ALICCP_OPS_OBJ) $(LIB_ROCKSDB)
 	$(CXX) -c $< -o $@ $(INCLUDES) $(SHARD_LIB_FLAGS) $(CXXFLAGS) $(TF_CFLAGS)
 
 %.o: %.cu
-	nvcc -c -o $@ $< $(TF_CFLAGS) $(INCLUDES) $(CXXFLAGS) -DGOOGLE_CUDA=1 -x cu -Xcompiler -fPIC
+	nvcc -c -o $@ $< $(TF_CFLAGS) $(INCLUDES) $(CXXFLAGS) -DGOOGLE_CUDA=1 -x cu -Xcompiler -fPIC --expt-relaxed-constexpr
 
 $(LIB_ROCKSDB): $(LIB_ROCKSDB_MAKEFILE)
 	$(MAKE) -C $(ROCKSDB_PATH)/build VERBOSE=1 $(JOBS) 
@@ -98,9 +98,9 @@ $(LIB_GFLAGS_MAKEFILE):
 	- mkdir $(GFLAGS_PATH)
 	- cd $(GFLAGS_PATH) && $(CMAKE) .. $(GFLAGS_COMPILE_OPT)
 
-.PHONY: clean
+.PHONY: clean distclean
 
-clean:
+distclean:
 	-rm $(GENERATEDS)
 	-rm read_from_db
 	-rm write_to_db
@@ -109,3 +109,11 @@ clean:
 	-rm -rf $(GFLAGS_PATH)/*
 	-rm -rf $(FLATBUFFERS_PATH)/*
 	-rm *.o
+	-rm *.so
+
+clean:
+	-rm $(GENERATEDS)
+	-rm *.so
+	-rm *.o
+	-rm write_to_db
+	-rm read_from_db
