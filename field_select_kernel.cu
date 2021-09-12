@@ -114,7 +114,7 @@ FieldSelectFuctor<Eigen::GpuDevice>::FieldSelectFuctor(Eigen::GpuDevice const& d
 
 template<typename Func, typename... Args>
 static void
-luanch_cuda_kernel(Func kernel,
+launch_cuda_kernel(Func kernel,
                    cudaStream_t const& stream,
                    unsigned int const nx,
                    unsigned int const ny,
@@ -159,7 +159,7 @@ FieldSelectFuctor<Eigen::GpuDevice>::launch_target_field_mask(const unsigned int
     auto const& stream = device_.stream();
     cudaMemsetAsync(counts, 0, sizeof(int), stream);
     cudaMemsetAsync(conds, 0, ny * sizeof(int), stream);
-    luanch_cuda_kernel(
+    launch_cuda_kernel(
         target_field_mask, stream, nx, ny, nxy, -1, target_field, field_ids, counts, conds, mask);
     cudaMemcpyAsync(cpu_counts_portable, counts, sizeof(int), cudaMemcpyDeviceToHost, stream);
     cudaMemcpyAsync(cpu_conds, conds, sizeof(int) * ny, cudaMemcpyDeviceToHost, stream);
@@ -178,7 +178,7 @@ FieldSelectFuctor<Eigen::GpuDevice>::launch_target_field_mask(const unsigned int
 }
 
 void
-FieldSelectFuctor<Eigen::GpuDevice>::luanch_select_feat(const unsigned int nx,
+FieldSelectFuctor<Eigen::GpuDevice>::launch_select_feat(const unsigned int nx,
                                                         const unsigned int ny,
                                                         const unsigned int nxy,
                                                         const int* mask,
@@ -196,7 +196,7 @@ FieldSelectFuctor<Eigen::GpuDevice>::luanch_select_feat(const unsigned int nx,
     assert(cpu_counts);
     cudaMemcpyAsync(cpu_counts, counts, sizeof(int), cudaMemcpyDeviceToHost, stream);
 
-    luanch_cuda_kernel(
+    launch_cuda_kernel(
         where, stream, nx, ny, nxy, 0, mask, feat_ids, feat_values, conds, counts, output_indices);
     cudaStreamSynchronize(stream);
 
@@ -228,7 +228,7 @@ FieldSelectFuctor<Eigen::GpuDevice>::luanch_select_feat(const unsigned int nx,
                sizeof(long long int) * *cpu_counts * 2,
                cudaMemcpyHostToDevice);
 
-    luanch_cuda_kernel(select_feat,
+    launch_cuda_kernel(select_feat,
                        stream,
                        nx,
                        (unsigned int)*cpu_counts,
