@@ -515,7 +515,7 @@ class AliCCPSelectField : public OpKernel
         auto output_feat_ids = tensor_access_ptr(*output_feat_ids_tensor, int64);
         auto output_feat_values = tensor_access_ptr(*output_feat_values_tensor, float);
 
-        functor.luanch_select_feat(nx,
+        functor.launch_select_feat(nx,
                                    ny,
                                    nxy,
                                    mask_ptr,
