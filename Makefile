@@ -41,10 +41,21 @@ GENERATEDS := $(FBS_IDL:%.fbs=%_generated.h)
 SHARD_LIB_FLAGS += -fPIC
 CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
 CXXFLAGS += -std=c++11
-CXXFLAGS += -O3
+CXXFLAGS += -g
+CXXFLAGS += -O0
 
 INCLUDES := -I$(ROCKSDB_PATH)/include/
 INCLUDES += -I$(GFLAGS_PATH)/build/include/
+INCLUDES += -I$(_TOP_)
+INCLUDES += -I/usr/local/cuda-10.1/targets/x86_64-linux/include/
+
+GOOGLE_CUDA=1
+ALICCP_OPS_OBJ += aliccp_rocksdb_op.o
+ifeq ($(GOOGLE_CUDA),1)
+ALICCP_OPS_OBJ += field_select_kernel.o
+TF_LFLAGS += -L/usr/local/cuda-10.1/targets/x86_64-linux/lib/
+TF_LFLAGS += -lcudart
+endif
 
 all: read_from_db write_to_db aliccp_rocksdb_op.so
 $(GENERATEDS) : $(FBS_IDL) $(FLATC)
@@ -57,8 +68,14 @@ read_from_db: read_from_db.cpp $(GENERATEDS) $(LIB_ROCKSDB) $(LIB_GFLAGS)
 write_to_db: write_to_db.cpp $(GENERATEDS) $(LIB_ROCKSDB) $(LIB_GFLAGS)
 	$(CXX)  write_to_db.cpp $(CXXFLAGS) $(INCLUDES) $(GFLAGS_LDFLAGS) $(ROCKSDB_LDFALGS) -o $@ -lz
 
-%.so: %.cpp $(LIB_ROCKSDB)
-	$(CXX) -shared $< -o $@ $(INCLUDES) $(SHARD_LIB_FLAGS) $(CXXFLAGS) $(TF_CFLAGS) $(TF_LFLAGS) $(ROCKSDB_LDFALGS)
+aliccp_rocksdb_op.so: $(ALICCP_OPS_OBJ) $(LIB_ROCKSDB)
+	$(CXX) -shared $(ALICCP_OPS_OBJ) -o $@ $(CXXFLAGS) $(TF_CFLAGS)  $(TF_LFLAGS) $(ROCKSDB_LDFALGS)
+
+%.o: %.cpp
+	$(CXX) -c $< -o $@ $(INCLUDES) $(SHARD_LIB_FLAGS) $(CXXFLAGS) $(TF_CFLAGS)
+
+%.o: %.cu
+	nvcc -c -o $@ $< $(TF_CFLAGS) $(INCLUDES) $(CXXFLAGS) -DGOOGLE_CUDA=1 -x cu -Xcompiler -fPIC
 
 $(LIB_ROCKSDB): $(LIB_ROCKSDB_MAKEFILE)
 	$(MAKE) -C $(ROCKSDB_PATH)/build VERBOSE=1 $(JOBS) 
@@ -91,3 +108,4 @@ clean:
 	-rm -rf $(ROCKSDB_PATH)/build/*
 	-rm -rf $(GFLAGS_PATH)/*
 	-rm -rf $(FLATBUFFERS_PATH)/*
+	-rm *.o
