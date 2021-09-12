@@ -49,12 +49,13 @@ INCLUDES += -I$(GFLAGS_PATH)/build/include/
 INCLUDES += -I$(_TOP_)
 INCLUDES += -I/usr/local/cuda-10.1/targets/x86_64-linux/include/
 
-GOOGLE_CUDA=1
+ALICCP_CUDA=1
 ALICCP_OPS_OBJ += aliccp_rocksdb_op.o
-ifeq ($(GOOGLE_CUDA),1)
+ifeq ($(ALICCP_CUDA),1)
 ALICCP_OPS_OBJ += field_select_kernel.o
 TF_LFLAGS += -L/usr/local/cuda-10.1/targets/x86_64-linux/lib/
 TF_LFLAGS += -lcudart
+TF_CFLAGS += -DALICCP_CUDA
 endif
 
 all: read_from_db write_to_db aliccp_rocksdb_op.so
@@ -75,7 +76,7 @@ aliccp_rocksdb_op.so: $(ALICCP_OPS_OBJ) $(LIB_ROCKSDB)
 	$(CXX) -c $< -o $@ $(INCLUDES) $(SHARD_LIB_FLAGS) $(CXXFLAGS) $(TF_CFLAGS)
 
 %.o: %.cu
-	nvcc -c -o $@ $< $(TF_CFLAGS) $(INCLUDES) $(CXXFLAGS) -DGOOGLE_CUDA=1 -x cu -Xcompiler -fPIC --expt-relaxed-constexpr
+	nvcc -c -o $@ $< $(TF_CFLAGS) $(INCLUDES) $(CXXFLAGS) -x cu -Xcompiler -fPIC
 
 $(LIB_ROCKSDB): $(LIB_ROCKSDB_MAKEFILE)
 	$(MAKE) -C $(ROCKSDB_PATH)/build VERBOSE=1 $(JOBS) 

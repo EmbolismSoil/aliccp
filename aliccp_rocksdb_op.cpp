@@ -18,6 +18,10 @@
 #include <type_traits>
 #include <unordered_set>
 
+#ifdef ALICCP_CUDA
+#include "field_select_kernel.h"
+#endif
+
 namespace std {
 template<>
 struct hash<rocksdb::Slice>
@@ -438,7 +442,7 @@ class AliCCPRocksDBOp : public OpKernel
     std::unordered_map<int64, std::unordered_map<int64, int64>> vocab_;
 };
 
-#ifdef GOOGLE_CUDA
+#ifdef ALICCP_CUDA
 REGISTER_OP("AliCCPSelectField")
     .Input("field_id: int64")
     .Input("feat_id: int64")
@@ -448,7 +452,6 @@ REGISTER_OP("AliCCPSelectField")
     .Output("ids: int64")
     .Output("values: float32");
 
-#include "field_select_kernel.h"
 #define tensor_access_ptr(tensor, type) (&((tensor).flat<type>()(0)))
 class AliCCPSelectField : public OpKernel
 {
